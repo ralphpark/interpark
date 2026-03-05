@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+venv/
+dist/
+build/
+*.spec.bak
+.env
+*.egg-info/
+docs/
+.bkit-memory.json

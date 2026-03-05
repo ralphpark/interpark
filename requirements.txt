@@ -1,0 +1,4 @@
+PyQt6>=6.6.0
+ntplib>=0.4.0
+websocket-client>=1.6.0
+pyinstaller>=6.0.0
