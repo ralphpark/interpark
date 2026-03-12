@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
     - name: Checkout source
@@ -38,7 +40,7 @@ jobs:
       run: echo "sha_short=$($env:GITHUB_SHA.Substring(0,7))" >> $env:GITHUB_OUTPUT
 
     - name: Create Release
-      uses: softprops/action-gh-release@v3
+      uses: softprops/action-gh-release@v2
       with:
         tag_name: build-${{ steps.vars.outputs.sha_short }}
         name: "AvocadoTicketMacro (${{ steps.vars.outputs.sha_short }})"
