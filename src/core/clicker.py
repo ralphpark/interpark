@@ -327,6 +327,9 @@ class TicketClicker:
             if (window.__avocadoClicked) return;
             if (!isPageReady()) return;
 
+            // ★ 후보 수집 후 가장 큰 버튼 클릭 (작은 요소 오클릭 방지)
+            var candidates = [];
+
             // 1) a.sideBtn
             var sideBtns = document.querySelectorAll('a.sideBtn');
             for (var i = 0; i < sideBtns.length; i++) {
@@ -337,10 +340,11 @@ class TicketClicker:
                 if (text.indexOf('일반예매') >= 0 || text.indexOf('오픈예정') >= 0) continue;
                 if (text.indexOf('예매하기') >= 0) {
                     if (btn.classList.contains('is-disabled')) continue;
-                    doClick(btn, 'sideBtn');
-                    return;
+                    var rect = btn.getBoundingClientRect();
+                    candidates.push({el: btn, src: 'sideBtn', area: rect.width * rect.height, w: rect.width, h: rect.height});
                 }
             }
+
             // 2) 모든 a, button 요소
             var els = document.querySelectorAll('a, button, [role="button"]');
             for (var i = 0; i < els.length; i++) {
@@ -349,9 +353,22 @@ class TicketClicker:
                 if (el.tagName === 'A' && el.classList.contains('sideBtn')) continue;
                 var text = el.textContent.trim();
                 if (text.indexOf('예매하기') >= 0 && text.length < 50) {
-                    doClick(el, 'other');
-                    return;
+                    var rect = el.getBoundingClientRect();
+                    candidates.push({el: el, src: 'other', area: rect.width * rect.height, w: rect.width, h: rect.height});
                 }
+            }
+
+            // ★ 로그: 발견된 후보 수
+            if (candidates.length > 0) {
+                window.__avocadoLog.push('candidates: ' + candidates.length +
+                    ' | sizes: ' + candidates.map(function(c) { return c.w+'x'+c.h+'('+c.src+')'; }).join(', '));
+            }
+
+            // ★ 가장 큰 버튼 선택 (메인 예매하기 버튼은 가장 클 것)
+            if (candidates.length > 0) {
+                candidates.sort(function(a, b) { return b.area - a.area; });
+                var best = candidates[0];
+                doClick(best.el, best.src);
             }
         }
 
@@ -361,21 +378,45 @@ class TicketClicker:
             var now = Date.now();
             var elapsed = now - window.__avocadoStartTime;
 
+            // ★ 디버그: 클릭 대상 상세 정보 기록
+            var btnInfo = {
+                tag: btn.tagName,
+                cls: btn.className,
+                href: btn.href || '',
+                w: Math.round(rect.width),
+                h: Math.round(rect.height),
+                parent: btn.parentElement ? btn.parentElement.className : ''
+            };
+            window.__avocadoLog.push('click_target: ' + JSON.stringify(btnInfo));
+
+            // ★ 크기 검증: 예매하기 버튼은 최소 150px 이상 너비
+            if (rect.width < 100 || rect.height < 30) {
+                window.__avocadoLog.push('WARN: 버튼이 너무 작음! ' + rect.width + 'x' + rect.height);
+                // 작은 버튼이면 무시하고 더 큰 버튼 찾기
+                return;
+            }
+
             // 클릭 실행 (3중: .click + mousedown/up + MouseEvent)
             btn.click();
             btn.dispatchEvent(new MouseEvent('mousedown', {bubbles:true, cancelable:true, view:window, clientX:x, clientY:y}));
             btn.dispatchEvent(new MouseEvent('mouseup', {bubbles:true, cancelable:true, view:window, clientX:x, clientY:y}));
             btn.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window, clientX:x, clientY:y}));
 
-            // href가 있으면 직접 네비게이션도 시도 (클릭 이벤트가 씹힐 경우 대비)
-            if (btn.href && btn.href.indexOf('javascript:') < 0) {
+            // href가 실제 URL이면 직접 네비게이션도 시도 (클릭 이벤트가 씹힐 경우 대비)
+            if (btn.href && btn.href.indexOf('javascript:') < 0
+                && btn.href.indexOf('#') < 0
+                && btn.href !== window.location.href
+                && btn.href.indexOf('http') === 0) {
                 setTimeout(function() { window.location.href = btn.href; }, 50);
             }
 
             window.__avocadoClicked = {
                 time: now, x: Math.round(x), y: Math.round(y),
                 text: btn.textContent.trim().substring(0, 30), src: src,
-                elapsed: elapsed
+                elapsed: elapsed,
+                w: Math.round(rect.width), h: Math.round(rect.height),
+                cls: (btn.className || '').substring(0, 50),
+                href: (btn.href || '').substring(0, 100)
             };
             if (window.__avocadoTimer) {
                 clearInterval(window.__avocadoTimer);
@@ -423,7 +464,7 @@ class TicketClicker:
     (function() {
         if (window.__avocadoClicked) {
             var r = window.__avocadoClicked;
-            return {clicked: true, time: r.time, x: r.x, y: r.y, text: r.text, src: r.src, elapsed: r.elapsed || 0};
+            return {clicked: true, time: r.time, x: r.x, y: r.y, text: r.text, src: r.src, elapsed: r.elapsed || 0, w: r.w || 0, h: r.h || 0, cls: r.cls || '', href: r.href || ''};
         }
         return {clicked: false, timerActive: !!window.__avocadoTimer};
     })()
@@ -437,7 +478,7 @@ class TicketClicker:
         // 1) 자동클릭 결과 확인
         if (window.__avocadoClicked) {
             var r = window.__avocadoClicked;
-            result.autoClicked = {clicked: true, time: r.time, x: r.x, y: r.y, text: r.text, src: r.src, elapsed: r.elapsed || 0};
+            result.autoClicked = {clicked: true, time: r.time, x: r.x, y: r.y, text: r.text, src: r.src, elapsed: r.elapsed || 0, w: r.w || 0, h: r.h || 0, cls: r.cls || '', href: r.href || ''};
             return result;
         }
         result.autoClickActive = !!window.__avocadoTimer;

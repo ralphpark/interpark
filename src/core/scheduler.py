@@ -234,14 +234,27 @@ class ClickScheduler(QThread):
         src = auto_result.get('src', '?')
         js_elapsed = auto_result.get('elapsed', 0)  # JS 내부 경과시간
 
+        btn_w = auto_result.get('w', 0)
+        btn_h = auto_result.get('h', 0)
+        btn_cls = auto_result.get('cls', '')
+        btn_href = auto_result.get('href', '')
+
         self.log_signal.emit(f"[감지] ★★★ 브라우저 자동 클릭 성공! ★★★")
         self.log_signal.emit(f"[감지] 좌표: ({ax}, {ay}) | [{at}] | 출처: {src}")
+        self.log_signal.emit(f"[감지] 버튼 크기: {btn_w}x{btn_h} | class: {btn_cls}")
+        if btn_href:
+            self.log_signal.emit(f"[감지] href: {btn_href}")
         self.log_signal.emit(f"[감지] JS 내부 감지→클릭: {js_elapsed}ms | 확인 시점: 목표 대비 {diff_ms:+.1f}ms")
 
-        # CDP 마우스 클릭으로 보강 (JS click이 안 먹는 경우 대비)
+        # ★ CDP 마우스 클릭으로 보강 (JS click이 안 먹는 경우 대비)
+        # CDP 클릭은 OS 수준 입력을 시뮬레이션하므로 더 신뢰도 높음
         if ax > 0 and ay > 0:
             cdp.mouse_click(ax, ay)
-            self.log_signal.emit(f"[클릭] CDP 보강 클릭: ({ax}, {ay})")
+            self.log_signal.emit(f"[클릭] CDP 보강 클릭 1차: ({ax}, {ay})")
+            # 50ms 후 한 번 더 클릭 (첫 클릭이 무시될 수 있음)
+            time.sleep(0.05)
+            cdp.mouse_click(ax, ay)
+            self.log_signal.emit(f"[클릭] CDP 보강 클릭 2차: ({ax}, {ay})")
 
         self.log_signal.emit(f"[클릭] ─────────────────────────────")
         self.log_signal.emit(f"[클릭] 결과: 성공 (브라우저 자동)")
@@ -252,7 +265,7 @@ class ClickScheduler(QThread):
         self.log_signal.emit(">>> 예매하기 클릭 성공! 브라우저에서 확인하세요 <<<")
         self.click_result_signal.emit(True)
 
-        # ★ 클릭 후 페이지 전환 모니터링
+        # ★ 클릭 후 페이지 전환 모니터링 (전환 안 되면 재클릭 시도)
         self._monitor_page_after_click(cdp)
 
     # 좌표 재조회 스크립트 (폴백용)
@@ -348,11 +361,11 @@ class ClickScheduler(QThread):
         var readyState = document.readyState;
         var title = document.title || '';
 
-        // 좌석 선택 페이지 감지
+        // 좌석 선택 페이지 감지 (URL 기반만 - DOM 오탐 방지)
         var isSeatPage = url.indexOf('Book/BookSeat') >= 0
-            || url.indexOf('seat') >= 0
-            || url.indexOf('Seat') >= 0
-            || !!document.querySelector('[class*="seat"], [class*="Seat"], .seatMap, #seatMap');
+            || url.indexOf('/book/') >= 0
+            || url.indexOf('/Book/') >= 0
+            || (url.indexOf('/Seat') >= 0 && url.indexOf('/goods/') < 0);
 
         // 대기열/큐 페이지 감지
         var isQueue = url.indexOf('queue') >= 0
@@ -396,19 +409,22 @@ class ClickScheduler(QThread):
     """
 
     def _monitor_page_after_click(self, cdp):
-        """클릭 후 페이지 전환 상태를 30초간 모니터링."""
+        """클릭 후 페이지 전환 상태를 30초간 모니터링. 전환 안 되면 재클릭 시도."""
         self.log_signal.emit("[모니터] ── 페이지 전환 모니터링 시작 ──")
         click_url = None
         try:
             click_url = cdp.get_current_url()
         except Exception:
             pass
+        # URL에서 #만 제거해서 비교 기준 설정 (클릭 시 # 붙는 경우 대비)
+        base_url = click_url.rstrip('#') if click_url else None
         self.log_signal.emit(f"[모니터] 클릭 시점 URL: {click_url or '확인 불가'}")
 
         start = time.perf_counter()
         check_count = 0
         last_state = None
         navigated = False
+        retry_clicked = False
 
         while check_count < 30 and self.is_running:
             time.sleep(1.0)
@@ -418,8 +434,10 @@ class ClickScheduler(QThread):
             try:
                 status = cdp.execute_script(self.PAGE_STATUS_SCRIPT)
             except Exception:
+                # 응답 없음 = 페이지 전환 중일 가능성 높음
                 self.log_signal.emit(f"[모니터] {elapsed:.1f}초 | 페이지 로딩 중... (응답 없음)")
                 self.status_signal.emit(f"페이지 로딩 중... ({elapsed:.0f}초)")
+                navigated = True  # 응답이 없으면 전환 중으로 간주
                 continue
 
             if not status:
@@ -430,9 +448,10 @@ class ClickScheduler(QThread):
             current_url = status.get('url', '')
             ready = status.get('readyState', '')
             title = status.get('title', '')
+            current_base = current_url.rstrip('#') if current_url else ''
 
-            # URL 변경 감지
-            if click_url and current_url != click_url and not navigated:
+            # URL 변경 감지 (# 제거 후 비교)
+            if base_url and current_base != base_url and not navigated:
                 navigated = True
                 self.log_signal.emit(f"[모니터] ★ 페이지 전환됨! ({elapsed:.1f}초)")
                 self.log_signal.emit(f"[모니터] 새 URL: {current_url}")
@@ -462,6 +481,34 @@ class ClickScheduler(QThread):
                 self.log_signal.emit(f"[모니터] {elapsed:.1f}초 | {pending}")
                 self.status_signal.emit(f"{pending} ({elapsed:.0f}초)")
                 continue
+
+            # ★ 3초 지나도 URL 안 바뀌면 재클릭 시도
+            if check_count == 3 and not navigated and not retry_clicked:
+                retry_clicked = True
+                self.log_signal.emit(f"[모니터] ⚠ 3초 경과 - 페이지 전환 없음! 재클릭 시도...")
+                try:
+                    coords = cdp.execute_script(self.FRESH_COORDS_SCRIPT)
+                    if coords and coords.get('x', 0) > 0:
+                        rx, ry = int(coords['x']), int(coords['y'])
+                        cdp.mouse_click(rx, ry)
+                        self.log_signal.emit(f"[모니터] 재클릭: ({rx}, {ry}) | {coords.get('src', '?')}")
+                        # JS 클릭도 추가로 시도
+                        cdp.execute_script("""
+                        (function() {
+                            var btns = document.querySelectorAll('a.sideBtn');
+                            for (var i = 0; i < btns.length; i++) {
+                                if (btns[i].textContent.indexOf('예매하기') >= 0 && btns[i].offsetHeight > 0) {
+                                    btns[i].click();
+                                    return 'clicked';
+                                }
+                            }
+                            return 'not_found';
+                        })()
+                        """)
+                    else:
+                        self.log_signal.emit(f"[모니터] 재클릭 대상 없음 (버튼 사라짐)")
+                except Exception as e:
+                    self.log_signal.emit(f"[모니터] 재클릭 실패: {e}")
 
             # 일반 상태 (5초마다 로그)
             state_key = f"{current_url}|{ready}"
