@@ -424,7 +424,6 @@ class ClickScheduler(QThread):
         check_count = 0
         last_state = None
         navigated = False
-        retry_clicked = False
 
         while check_count < 30 and self.is_running:
             time.sleep(1.0)
@@ -481,34 +480,6 @@ class ClickScheduler(QThread):
                 self.log_signal.emit(f"[모니터] {elapsed:.1f}초 | {pending}")
                 self.status_signal.emit(f"{pending} ({elapsed:.0f}초)")
                 continue
-
-            # ★ 3초 지나도 URL 안 바뀌면 재클릭 시도
-            if check_count == 3 and not navigated and not retry_clicked:
-                retry_clicked = True
-                self.log_signal.emit(f"[모니터] ⚠ 3초 경과 - 페이지 전환 없음! 재클릭 시도...")
-                try:
-                    coords = cdp.execute_script(self.FRESH_COORDS_SCRIPT)
-                    if coords and coords.get('x', 0) > 0:
-                        rx, ry = int(coords['x']), int(coords['y'])
-                        cdp.mouse_click(rx, ry)
-                        self.log_signal.emit(f"[모니터] 재클릭: ({rx}, {ry}) | {coords.get('src', '?')}")
-                        # JS 클릭도 추가로 시도
-                        cdp.execute_script("""
-                        (function() {
-                            var btns = document.querySelectorAll('a.sideBtn');
-                            for (var i = 0; i < btns.length; i++) {
-                                if (btns[i].textContent.indexOf('예매하기') >= 0 && btns[i].offsetHeight > 0) {
-                                    btns[i].click();
-                                    return 'clicked';
-                                }
-                            }
-                            return 'not_found';
-                        })()
-                        """)
-                    else:
-                        self.log_signal.emit(f"[모니터] 재클릭 대상 없음 (버튼 사라짐)")
-                except Exception as e:
-                    self.log_signal.emit(f"[모니터] 재클릭 실패: {e}")
 
             # 일반 상태 (5초마다 로그)
             state_key = f"{current_url}|{ready}"
