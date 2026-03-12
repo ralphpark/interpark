@@ -15,6 +15,8 @@ class CountdownWidget(QWidget):
         self.ntp_offset = 0.0
         self.start_remaining = 0.0
         self._blink_on = True
+        self._detect_mode = False
+        self._click_done = False
 
         self._setup_ui()
 
@@ -61,14 +63,29 @@ class CountdownWidget(QWidget):
         """)
         layout.addWidget(self.progress_bar)
 
-    def start(self, target: datetime, ntp_offset: float):
+    def start(self, target: datetime, ntp_offset: float, detect_mode: bool = False):
         """카운트다운 시작."""
         self.target_timestamp = target.timestamp()
         self.ntp_offset = ntp_offset
+        self._detect_mode = detect_mode
+        self._click_done = False
         self.start_remaining = self.target_timestamp - (time.time() + ntp_offset)
         if self.start_remaining <= 0:
             self.start_remaining = 1.0
         self.timer.start()
+
+    def on_click_result(self, success: bool):
+        """스케줄러에서 실제 클릭 결과를 받았을 때 호출."""
+        self._click_done = True
+        if success:
+            self.time_label.setStyleSheet("color: #2ecc71; padding: 10px;")
+            self.progress_bar.setValue(10000)
+            self.status_label.setText("클릭 완료!")
+        else:
+            self.time_label.setStyleSheet("color: #e94560; padding: 10px;")
+            self.status_label.setText("클릭 실패")
+        # 5초 후 타이머 중지
+        QTimer.singleShot(5000, self.timer.stop)
 
     def stop(self):
         """카운트다운 중지."""
@@ -83,6 +100,8 @@ class CountdownWidget(QWidget):
         self.time_label.setStyleSheet("color: #e0e0e0; padding: 10px;")
         self.status_label.setText("대기")
         self.progress_bar.setValue(0)
+        self._detect_mode = False
+        self._click_done = False
 
     def _update_display(self):
         """10ms 간격으로 카운트다운 갱신."""
@@ -121,7 +140,7 @@ class CountdownWidget(QWidget):
                     self.time_label.setStyleSheet("color: #ff6b81; padding: 10px;")
                 self.status_label.setText("준비하세요!")
         else:
-            # 시간 초과
+            # 시간 초과 후
             elapsed_ms = int(abs(remaining) * 1000)
             hours = elapsed_ms // 3600000
             minutes = (elapsed_ms % 3600000) // 60000
@@ -129,10 +148,31 @@ class CountdownWidget(QWidget):
             ms = elapsed_ms % 1000
 
             self.time_label.setText(f"+{hours:02d}:{minutes:02d}:{seconds:02d}.{ms:03d}")
-            self.time_label.setStyleSheet("color: #2ecc71; padding: 10px;")
-            self.progress_bar.setValue(10000)
-            self.status_label.setText("클릭 완료!")
 
-            # 5초 후 타이머 중지
-            if abs(remaining) > 5:
-                self.timer.stop()
+            if self._click_done:
+                # 이미 클릭 결과를 받은 상태 - on_click_result에서 처리
+                return
+
+            if self._detect_mode:
+                # 감지 모드: 클릭 결과 오기 전까지 "감지 중" 표시 (노란색 깜박임)
+                self._blink_on = not self._blink_on
+                if self._blink_on:
+                    self.time_label.setStyleSheet("color: #f39c12; padding: 10px;")
+                else:
+                    self.time_label.setStyleSheet("color: #e67e22; padding: 10px;")
+                self.progress_bar.setValue(10000)
+                self.status_label.setText("오픈 감지 중...")
+
+                # 120초 후 타이머 중지
+                if abs(remaining) > 120:
+                    self.timer.stop()
+                    self.status_label.setText("감지 타임아웃")
+            else:
+                # 정시 모드: 기존 동작 (즉시 클릭 완료 표시)
+                self.time_label.setStyleSheet("color: #2ecc71; padding: 10px;")
+                self.progress_bar.setValue(10000)
+                self.status_label.setText("클릭 완료!")
+
+                # 5초 후 타이머 중지
+                if abs(remaining) > 5:
+                    self.timer.stop()

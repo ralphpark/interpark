@@ -85,8 +85,8 @@ class CDPConnection:
     def last_error(self) -> str:
         return self._last_error or "알 수 없는 오류"
 
-    def _send(self, method: str, params: dict = None) -> dict:
-        """CDP 명령 전송 + 응답 대기 (이벤트 무시)."""
+    def _send(self, method: str, params: dict = None, timeout: float = 10.0) -> dict:
+        """CDP 명령 전송 + 응답 대기 (타임아웃 + 이벤트 무시)."""
         self._msg_id += 1
         msg_id = self._msg_id
         self._ws.send(json.dumps({
@@ -94,10 +94,21 @@ class CDPConnection:
             'method': method,
             'params': params or {},
         }))
+        deadline = time.time() + timeout
+        old_timeout = self._ws.gettimeout()
         while True:
-            resp = json.loads(self._ws.recv())
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                raise TimeoutError(f"CDP response timeout: {method} (>{timeout}s)")
+            self._ws.settimeout(min(remaining, 1.0))
+            try:
+                resp = json.loads(self._ws.recv())
+            except websocket.WebSocketTimeoutException:
+                continue
             if resp.get('id') == msg_id:
+                self._ws.settimeout(old_timeout)
                 return resp
+            # event or other response - ignore
 
     def _fire(self, method: str, params: dict = None):
         """CDP 명령 전송 (응답 대기 없음). 클릭 등 속도가 중요한 곳에 사용."""
@@ -107,6 +118,21 @@ class CDPConnection:
             'method': method,
             'params': params or {},
         }))
+
+    def register_script(self, name: str, script: str):
+        """JS 함수를 브라우저에 등록 (한 번만 전송, 이후 호출만)."""
+        # Wrap script as a named function on window object
+        wrapped = f"window.__avocado_{name} = function() {{ return ({script}); }}"
+        self._send('Runtime.evaluate', {'expression': wrapped, 'returnByValue': True})
+
+    def execute_registered(self, name: str):
+        """등록된 JS 함수 호출 (경량 호출)."""
+        resp = self._send('Runtime.evaluate', {
+            'expression': f'window.__avocado_{name} ? window.__avocado_{name}() : null',
+            'returnByValue': True,
+        })
+        result = resp.get('result', {}).get('result', {})
+        return result.get('value')
 
     def execute_script(self, script: str):
         """JavaScript 실행 (Runtime.evaluate)."""

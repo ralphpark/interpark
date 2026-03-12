@@ -32,3 +32,24 @@ jobs:
       with:
         name: AvocadoTicketMacro
         path: dist/AvocadoTicketMacro.exe
+
+    - name: Get short SHA
+      id: vars
+      run: echo "sha_short=$($env:GITHUB_SHA.Substring(0,7))" >> $env:GITHUB_OUTPUT
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: build-${{ steps.vars.outputs.sha_short }}
+        name: "AvocadoTicketMacro (${{ steps.vars.outputs.sha_short }})"
+        body: |
+          자동 빌드된 Windows 실행 파일입니다.
+
+          **다운로드**: 아래 `AvocadoTicketMacro.exe`를 클릭하세요.
+
+          커밋: ${{ github.sha }}
+        files: dist/AvocadoTicketMacro.exe
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
